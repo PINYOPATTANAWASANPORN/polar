@@ -141,6 +141,9 @@ class CustomerSeat(TimestampedSchema):
         description="Email of the seat member (set when member_model_enabled is true)",
     )
     customer_email: str | None = Field(description="The assigned customer email")
+    invitation_token: str | None = Field(
+        None, description="Invitation token for claiming the seat"
+    )
     invitation_token_expires_at: datetime | None = Field(
         description="When the invitation token expires"
     )
