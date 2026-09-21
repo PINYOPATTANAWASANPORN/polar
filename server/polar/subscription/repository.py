@@ -39,6 +39,7 @@ from polar.kit.repository import (
     SortingClause,
 )
 from polar.models import (
+    BenefitGrant,
     Customer,
     CustomerSeat,
     Discount,
@@ -551,6 +552,65 @@ class SubscriptionRepository(
             .options(*options)
         )
         return await self.get_all(statement)
+
+    async def get_subscriptions_with_expired_benefit_revocation_grace_period(
+        self,
+        now: datetime,
+        *,
+        options: Options = (),
+    ) -> Sequence[Subscription]:
+        """
+        Find past_due or unpaid subscriptions whose benefit revocation grace period
+        has expired, and which still have active (granted) benefit grants or claimed seats to revoke.
+        """
+        has_active_grants_or_seats_subquery = or_(
+            select(BenefitGrant.id)
+            .where(
+                BenefitGrant.subscription_id == Subscription.id,
+                BenefitGrant.is_granted,
+            )
+            .correlate(Subscription)
+            .exists(),
+            select(CustomerSeat.id)
+            .where(
+                CustomerSeat.subscription_id == Subscription.id,
+                CustomerSeat.status.in_((SeatStatus.claimed, SeatStatus.pending)),
+            )
+            .correlate(Subscription)
+            .exists(),
+        )
+
+        statement = (
+            self.get_base_statement()
+            .join(Organization, Subscription.organization_id == Organization.id)
+            .where(
+                Subscription.status.in_(
+                    (SubscriptionStatus.past_due, SubscriptionStatus.unpaid)
+                ),
+                Subscription.past_due_at.isnot(None),
+                has_active_grants_or_seats_subquery,
+            )
+            .options(*options)
+        )
+        subscriptions = await self.get_all(statement)
+
+        expired_subscriptions: list[Subscription] = []
+        for subscription in subscriptions:
+            grace_period_days = int(
+                subscription.organization.benefit_revocation_grace_period
+            )
+            if grace_period_days == 0:
+                continue
+            if not subscription.past_due_at:
+                continue
+
+            grace_period_ends_at = subscription.past_due_at + timedelta(
+                days=grace_period_days
+            )
+            if now >= grace_period_ends_at:
+                expired_subscriptions.append(subscription)
+
+        return expired_subscriptions
 
     def get_sorting_clause(self, property: SubscriptionSortProperty) -> SortingClause:
         match property:

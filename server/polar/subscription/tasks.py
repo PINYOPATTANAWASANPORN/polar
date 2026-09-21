@@ -296,3 +296,24 @@ async def send_trial_conversion_reminder(subscription_id: uuid.UUID) -> None:
         await subscription_service.send_trial_conversion_reminder_email(
             session, subscription
         )
+
+
+@actor(
+    actor_name="subscription.scan_expired_benefit_revocation_grace_periods",
+    cron_trigger=CronTrigger.from_crontab("0 * * * *"),
+    priority=TaskPriority.LOW,
+)
+async def scan_expired_benefit_revocation_grace_periods() -> None:
+    """Scan for past_due/unpaid subscriptions whose benefit revocation grace period has elapsed."""
+    now = utc_now()
+
+    async with AsyncSessionMaker() as session:
+        repository = SubscriptionRepository.from_session(session)
+        subscriptions = (
+            await repository.get_subscriptions_with_expired_benefit_revocation_grace_period(
+                now, options=repository.get_eager_options()
+            )
+        )
+
+    for sub in subscriptions:
+        enqueue_job("subscription.enqueue_benefits_grants", sub.id)

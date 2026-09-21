@@ -15,6 +15,7 @@ from polar.subscription.service import SubscriptionMeterCycleLag, SubscriptionSe
 from polar.subscription.tasks import (  # type: ignore[attr-defined]
     SubscriptionDoesNotExist,
     SubscriptionTierDoesNotExist,
+    scan_expired_benefit_revocation_grace_periods,
     subscription_cancel_for_organization,
     subscription_cycle,
     subscription_enqueue_benefits_grants,
@@ -25,6 +26,8 @@ from polar.subscription.tasks import (  # type: ignore[attr-defined]
 from tests.fixtures.database import SaveFixture
 from tests.fixtures.random_objects import (
     create_active_subscription,
+    create_benefit,
+    create_benefit_grant,
     create_subscription,
 )
 
@@ -353,3 +356,125 @@ class TestSubscriptionCycle:
         assert refreshed.scheduler_locked_at is None
         assert refreshed.current_period_end is not None
         assert refreshed.current_period_end > old_period_end
+
+
+@pytest.mark.asyncio
+class TestScanExpiredBenefitRevocationGracePeriods:
+    async def test_within_grace_period_not_enqueued(
+        self,
+        save_fixture: SaveFixture,
+        session: AsyncSession,
+        product: Product,
+        customer: Customer,
+        mocker: MockerFixture,
+    ) -> None:
+        enqueue_job_mock = mocker.patch("polar.subscription.tasks.enqueue_job")
+        product.organization.subscription_settings = {
+            **product.organization.subscription_settings,
+            "benefit_revocation_grace_period": 2,
+        }
+        await save_fixture(product.organization)
+
+        subscription = await create_subscription(
+            save_fixture,
+            product=product,
+            customer=customer,
+            status=SubscriptionStatus.past_due,
+        )
+        subscription.past_due_at = utc_now() - timedelta(days=1)
+        await save_fixture(subscription)
+
+        benefit = await create_benefit(save_fixture, organization=product.organization)
+        await create_benefit_grant(
+            save_fixture,
+            customer=customer,
+            benefit=benefit,
+            granted=True,
+            subscription_id=subscription.id,
+        )
+
+        session.expunge_all()
+
+        await scan_expired_benefit_revocation_grace_periods()
+
+        enqueue_job_mock.assert_not_called()
+
+    async def test_expired_grace_period_enqueued(
+        self,
+        save_fixture: SaveFixture,
+        session: AsyncSession,
+        product: Product,
+        customer: Customer,
+        mocker: MockerFixture,
+    ) -> None:
+        enqueue_job_mock = mocker.patch("polar.subscription.tasks.enqueue_job")
+        product.organization.subscription_settings = {
+            **product.organization.subscription_settings,
+            "benefit_revocation_grace_period": 2,
+        }
+        await save_fixture(product.organization)
+
+        subscription = await create_subscription(
+            save_fixture,
+            product=product,
+            customer=customer,
+            status=SubscriptionStatus.past_due,
+        )
+        subscription.past_due_at = utc_now() - timedelta(days=3)
+        await save_fixture(subscription)
+
+        benefit = await create_benefit(save_fixture, organization=product.organization)
+        await create_benefit_grant(
+            save_fixture,
+            customer=customer,
+            benefit=benefit,
+            granted=True,
+            subscription_id=subscription.id,
+        )
+
+        session.expunge_all()
+
+        await scan_expired_benefit_revocation_grace_periods()
+
+        enqueue_job_mock.assert_called_once_with(
+            "subscription.enqueue_benefits_grants", subscription.id
+        )
+
+    async def test_already_revoked_grants_not_enqueued(
+        self,
+        save_fixture: SaveFixture,
+        session: AsyncSession,
+        product: Product,
+        customer: Customer,
+        mocker: MockerFixture,
+    ) -> None:
+        enqueue_job_mock = mocker.patch("polar.subscription.tasks.enqueue_job")
+        product.organization.subscription_settings = {
+            **product.organization.subscription_settings,
+            "benefit_revocation_grace_period": 2,
+        }
+        await save_fixture(product.organization)
+
+        subscription = await create_subscription(
+            save_fixture,
+            product=product,
+            customer=customer,
+            status=SubscriptionStatus.past_due,
+        )
+        subscription.past_due_at = utc_now() - timedelta(days=3)
+        await save_fixture(subscription)
+
+        benefit = await create_benefit(save_fixture, organization=product.organization)
+        await create_benefit_grant(
+            save_fixture,
+            customer=customer,
+            benefit=benefit,
+            granted=False,
+            subscription_id=subscription.id,
+        )
+
+        session.expunge_all()
+
+        await scan_expired_benefit_revocation_grace_periods()
+
+        enqueue_job_mock.assert_not_called()
