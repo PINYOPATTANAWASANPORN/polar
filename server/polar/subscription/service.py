@@ -4012,7 +4012,23 @@ class SubscriptionService:
             if await self._is_within_revocation_grace_period(
                 session, subscription, organization
             ):
-                # Don't enqueue revocation yet, still within grace period
+                # Don't enqueue revocation yet, still within grace period.
+                # Schedule re-evaluation at grace period expiry so benefits are revoked
+                # even if the subscription remains past_due throughout dunning retries (#14358).
+                grace_period_days = int(organization.benefit_revocation_grace_period)
+                if subscription.past_due_at:
+                    grace_period_ends_at = subscription.past_due_at + timedelta(
+                        days=grace_period_days
+                    )
+                    delay_ms = max(
+                        int((grace_period_ends_at - utc_now()).total_seconds() * 1000),
+                        1000,
+                    )
+                    enqueue_job(
+                        "subscription.enqueue_benefits_grants",
+                        subscription.id,
+                        delay=delay_ms,
+                    )
                 return
 
         # For seat-based products, handle benefits through seats

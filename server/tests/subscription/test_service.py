@@ -9692,7 +9692,13 @@ class TestEnqueueBenefitsGrantsGracePeriod:
 
         enqueue_job_mock = mocker.patch("polar.subscription.service.enqueue_job")
         await subscription_service.enqueue_benefits_grants(session, subscription)
-        enqueue_job_mock.assert_not_called()
+        # Should schedule follow-up check at grace period expiry instead of doing nothing (#14358)
+        enqueue_job_mock.assert_called_once()
+        call_args = enqueue_job_mock.call_args
+        assert call_args[0][0] == "subscription.enqueue_benefits_grants"
+        assert call_args[0][1] == subscription.id
+        # 5 days remaining ~ 432,000,000 ms
+        assert 430_000_000 <= call_args[1]["delay"] <= 433_000_000
 
     async def test_grace_period_expired(
         self,
