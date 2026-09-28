@@ -97,10 +97,22 @@ export const LicenseKeysBenefitForm = () => {
             control={control}
             name="properties.expires.ttl"
             render={({ field }) => {
+              const value = field.value || ''
               return (
                 <FormItem className="w-full max-w-full">
                   <FormControl>
-                    <Input {...field} />
+                    <Input
+                      type="number"
+                      min={1}
+                      {...{
+                        ...field,
+                        value,
+                        onChange: (e) => {
+                          const val = e.target.value
+                          field.onChange(val === '' ? undefined : parseInt(val, 10))
+                        },
+                      }}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -155,10 +167,22 @@ export const LicenseKeysBenefitForm = () => {
             control={control}
             name="properties.activations.limit"
             render={({ field }) => {
+              const value = field.value || ''
               return (
                 <FormItem>
                   <FormControl>
-                    <Input {...field} />
+                    <Input
+                      type="number"
+                      min={1}
+                      {...{
+                        ...field,
+                        value,
+                        onChange: (e) => {
+                          const val = e.target.value
+                          field.onChange(val === '' ? undefined : parseInt(val, 10))
+                        },
+                      }}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
